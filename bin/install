@@ -20,17 +20,39 @@ install() {
     versionListUrl="${FLUTTER_STORAGE_BASE_URL}/flutter_infra_release/releases/releases_linux.json"
   fi
   
+  local releasesJson="$(curl -sL "${versionListUrl}")"
+
+  local installChannel=""
+  if [[ "${ASDF_INSTALL_VERSION}" =~ ^(stable|beta|dev)$ ]]; then
+    installChannel="${BASH_REMATCH[1]}"
+  fi
+
   local escapedInstallVersion=$(echo $ASDF_INSTALL_VERSION | sed 's/\./\\\./g;s/\+/\\\+/g')
-  local jsonResponse=$(curl -sL "${versionListUrl}" | "${JQ_BIN}" --arg VERSION "${escapedInstallVersion}" '.releases[] | select((.version + "-" + .channel) | test("^v?" + $VERSION))')
+
+  local jsonResponse=""
+  if [ -n "${installChannel}" ]; then
+    local currentHash=$(echo "${releasesJson}" | "${JQ_BIN}" -r --arg CHANNEL "${installChannel}" '.current_release[$CHANNEL]')
+    if [ -n "${currentHash}" ] && [ "${currentHash}" != "null" ]; then
+      jsonResponse=$(echo "${releasesJson}" | "${JQ_BIN}" --arg HASH "${currentHash}" '.releases[] | select(.hash == $HASH)')
+    fi
+  fi
+
+  if [ -z "${jsonResponse}" ]; then
+    jsonResponse=$(echo "${releasesJson}" | "${JQ_BIN}" --arg VERSION "${escapedInstallVersion}" '.releases[] | select((.version + "-" + .channel) | test("^v?" + $VERSION))')
+  fi
+
   local jsonResponseLength=$(echo "${jsonResponse}" | "${JQ_BIN}" -s 'length')
-  local filePath=$(echo "${jsonResponse}" | "${JQ_BIN}" -r '.archive')
+  local filePath=$(echo "${jsonResponse}" | "${JQ_BIN}" -r '.archive' | head -n 1)
   if [ "$(uname -s)" == "Darwin" ] && [ ${jsonResponseLength} -gt 1 ]; then
     local arch="x64"
     if [ "$(uname -m)" == "arm64" ]; then
       arch="arm64"
     fi
 
-    channel=$(echo "$ASDF_INSTALL_VERSION" | grep -oE '(stable|beta|dev)$' || echo "stable")
+    local channel="${installChannel}"
+    if [ -z "${channel}" ]; then
+      channel=$(echo "$ASDF_INSTALL_VERSION" | grep -oE '(stable|beta|dev)$' || echo "stable")
+    fi
     filePath=$(echo "${jsonResponse}" | "${JQ_BIN}" -r --arg ARCH "${arch}" --arg CHANNEL "${channel}" \
       '. | select(.dart_sdk_arch == $ARCH and .channel == $CHANNEL) | .archive' | head -n 1 )
   fi
